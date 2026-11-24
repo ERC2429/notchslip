@@ -21,6 +21,9 @@ final class PanelController: NSObject, NSWindowDelegate, NSTextViewDelegate {
     private var isResizing = false
     private var resizeStartSize: NSSize?
     private var holdOpen = false
+    /// True while a context menu is tracking: the mouse legitimately leaves the
+    /// panel to reach the menu, so auto-hiding must pause.
+    private var menuOpen = false
 
     private var lastExternalApp: NSRunningApplication?
     private let debug = ProcessInfo.processInfo.environment["NOTCHSLIP_DEBUG"] != nil
@@ -47,6 +50,8 @@ final class PanelController: NSObject, NSWindowDelegate, NSTextViewDelegate {
 
     deinit {
         ticker?.invalidate()
+        NotificationCenter.default.removeObserver(self, name: NSMenu.didBeginTrackingNotification, object: nil)
+        NotificationCenter.default.removeObserver(self, name: NSMenu.didEndTrackingNotification, object: nil)
         if let workspaceObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(workspaceObserver)
         }
@@ -87,6 +92,22 @@ final class PanelController: NSObject, NSWindowDelegate, NSTextViewDelegate {
         card.onEscape = { [weak self] in self?.collapse() }
         card.onKey = { [weak self] in self?.lastKeyAt = Date() }
         card.textView.delegate = self
+        card.menu = appContextMenu()
+
+        // Pause auto-hide while a menu is tracking. The mouse has to leave the
+        // panel to reach the menu, which would otherwise collapse it.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(menuDidBeginTracking),
+            name: NSMenu.didBeginTrackingNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(menuDidEndTracking),
+            name: NSMenu.didEndTrackingNotification,
+            object: nil
+        )
 
         card.textView.string = store.load()
         card.updatePlaceholder()
@@ -167,6 +188,74 @@ final class PanelController: NSObject, NSWindowDelegate, NSTextViewDelegate {
         )
     }
 
+    // MARK: - Context menu
+
+    private enum MenuTag {
+        static let app = 0x4E53 // 'NS'
+    }
+
+    /// Right-click menu on the panel. This is the reliable quit path: macOS parks
+    /// status-bar items under the notch when the menu bar runs out of room, so the
+    /// pencil icon is not always reachable.
+    private func appContextMenu() -> NSMenu {
+        let menu = NSMenu()
+        appMenuItems().forEach { menu.addItem($0) }
+        return menu
+    }
+
+    private func appMenuItems() -> [NSMenuItem] {
+        let reveal = NSMenuItem(
+            title: "在 Finder 中显示笔记",
+            action: #selector(revealNotes),
+            keyEquivalent: ""
+        )
+        reveal.target = self
+        reveal.tag = MenuTag.app
+
+        let login = NSMenuItem(
+            title: "开机时启动",
+            action: #selector(toggleLoginItem(_:)),
+            keyEquivalent: ""
+        )
+        login.target = self
+        login.tag = MenuTag.app
+        login.state = LoginItem.isEnabled ? .on : .off
+
+        let quit = NSMenuItem(
+            title: "退出 NotchSlip",
+            action: #selector(quitApp),
+            keyEquivalent: "q"
+        )
+        quit.target = self
+        quit.tag = MenuTag.app
+
+        return [reveal, login, quit]
+    }
+
+    func textView(_ view: NSTextView, menu: NSMenu, for event: NSEvent, at charIndex: Int) -> NSMenu? {
+        // AppKit may reuse its default menu; only append our items once.
+        guard !menu.items.contains(where: { $0.tag == MenuTag.app }) else { return menu }
+        menu.addItem(.separator())
+        appMenuItems().forEach { menu.addItem($0) }
+        return menu
+    }
+
+    @objc private func revealNotes() {
+        NSWorkspace.shared.activateFileViewerSelecting([store.url])
+    }
+
+    @objc private func toggleLoginItem(_ sender: NSMenuItem) {
+        LoginItem.toggle(sender)
+    }
+
+    @objc private func quitApp() {
+        saveNow()
+        NSApp.terminate(nil)
+    }
+
+    @objc private func menuDidBeginTracking() { menuOpen = true }
+    @objc private func menuDidEndTracking() { menuOpen = false }
+
     // MARK: - Hover tracking
 
     private func tick() {
@@ -183,6 +272,7 @@ final class PanelController: NSObject, NSWindowDelegate, NSTextViewDelegate {
                 expand()
             }
         case .expanded:
+            guard !menuOpen else { return }
             if holdOpen {
                 if hitZone.contains(mouse) { holdOpen = false }
                 return
@@ -203,6 +293,7 @@ final class PanelController: NSObject, NSWindowDelegate, NSTextViewDelegate {
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.state == .expanded else { return }
             self.hideWork = nil
+            if self.menuOpen { return }
             if self.holdOpen { return }
             if self.hitZone.contains(NSEvent.mouseLocation) { return }
 

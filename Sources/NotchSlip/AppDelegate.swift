@@ -81,17 +81,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func toggleLogin(_ sender: NSMenuItem) {
-        let enable = sender.state != .on
-        do {
-            try LoginItem.set(enabled: enable)
-            sender.state = enable ? .on : .off
-        } catch {
-            NSApp.activate(ignoringOtherApps: true)
-            let alert = NSAlert()
-            alert.messageText = enable ? "无法开启开机启动" : "无法关闭开机启动"
-            alert.informativeText = "把 NotchSlip.app 放到「应用程序」文件夹后再试。\n\n\(error.localizedDescription)"
-            alert.runModal()
-        }
+        LoginItem.toggle(sender)
     }
 
     @objc private func quitApp() {
@@ -149,6 +139,22 @@ enum LoginItem {
             try SMAppService.mainApp.register()
         } else {
             try SMAppService.mainApp.unregister()
+        }
+    }
+
+    /// Toggles the login item and keeps the menu item's checkmark in sync.
+    /// Shared by the menu bar menu and the panel's right-click menu.
+    static func toggle(_ item: NSMenuItem) {
+        let enable = item.state != .on
+        do {
+            try set(enabled: enable)
+            item.state = enable ? .on : .off
+        } catch {
+            NSApp.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            alert.messageText = enable ? "无法开启开机启动" : "无法关闭开机启动"
+            alert.informativeText = "把 NotchSlip.app 放到「应用程序」文件夹后再试。\n\n\(error.localizedDescription)"
+            alert.runModal()
         }
     }
 }

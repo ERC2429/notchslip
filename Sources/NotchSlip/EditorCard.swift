@@ -93,6 +93,7 @@ final class EditorCard: NSView {
 
         tv.onEscape = { [weak self] in self?.onEscape?() }
         tv.onAnyKey = { [weak self] in self?.onKey?() }
+        tv.onQuit = { NSApp.terminate(nil) }
 
         tv.frame = NSRect(origin: .zero, size: scrollView.contentSize)
         scrollView.documentView = tv
@@ -259,8 +260,16 @@ final class ResizeGrip: NSView {
 final class KeyTextView: NSTextView {
     var onEscape: (() -> Void)?
     var onAnyKey: (() -> Void)?
+    var onQuit: (() -> Void)?
 
     override func keyDown(with event: NSEvent) {
+        // ⌘Q is a second quit path: the menu bar icon can be hidden by macOS
+        // when the bar is crowded, so quitting must not depend on it.
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if flags == .command, event.charactersIgnoringModifiers?.lowercased() == "q" {
+            onQuit?()
+            return
+        }
         onAnyKey?()
         if event.keyCode == 53 { // Esc
             onEscape?()
